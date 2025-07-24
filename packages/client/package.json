@@ -1,0 +1,30 @@
+{
+  "name": "@mesh-kit/client",
+  "version": "2.0.0",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsup"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "eventemitter3": "^5.0.1",
+    "fast-json-patch": "^3.1.1"
+  },
+  "devDependencies": {
+    "@mesh-kit/shared": "file:../shared",
+    "tsup": "^8.5.0",
+    "typescript": "^5.8.3"
+  }
+}
