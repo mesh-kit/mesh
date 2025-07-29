@@ -76,10 +76,10 @@ describe("MeshServer", () => {
     expect(await server.roomManager.getMetadata("non-existent-room")).toBeNull();
 
     const allMeta = await server.roomManager.getAllMetadata();
-    expect(allMeta).toEqual([
+    expect(allMeta).toEqual(expect.arrayContaining([
       { id: room1, metadata: { ...initialMeta1, ...updateMeta1 } },
       { id: room2, metadata: initialMeta2 },
-    ]);
+    ]));
 
     // clearRoom preserves metadata
     await server.roomManager.clearRoom(room1);

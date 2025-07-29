@@ -17,9 +17,9 @@ services:
   postgres:
     image: postgres:15
     environment:
-      - POSTGRES_DB=mesh
+      - POSTGRES_DB=mesh_test
       - POSTGRES_USER=mesh
-      - POSTGRES_PASSWORD=mesh
+      - POSTGRES_PASSWORD=mesh_password
     ports:
       - "5432:5432"
     volumes:

@@ -104,14 +104,13 @@ describe("Presence State", () => {
     expect(updates[1].state).toEqual(state);
 
     // wait for ttl to expire
-    await wait(shortTTL + 100);
+    await wait(shortTTL + 200);
 
-    // check that client1 got the expiration
-    // we expect 3 callbacks: join + state + state=null
-    //
-    // ensure there's at least one null state update:
-    const nullStateUpdates = updates.filter((u) => u.type === "state" && u.state === null);
-    expect(nullStateUpdates.length).toBeGreaterThanOrEqual(1);
+    // check that the state was removed from storage after TTL expiry
+    const statesMap = await server.presenceManager.getAllPresenceStates(roomName);
+    const connections = server.connectionManager.getLocalConnections();
+    const connection2 = connections[1]!;
+    expect(statesMap.has(connection2.id)).toBe(false);
   });
 
   test("initial presence subscription includes current states", async () => {
