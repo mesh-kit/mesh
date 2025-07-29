@@ -1,10 +1,14 @@
 import type { PersistenceAdapter, PersistedMessage, PersistenceAdapterOptions, PersistedRecord } from "./types";
-import { Database } from "sqlite3";
+import sqlite3 from "sqlite3";
 import { convertToSqlPattern } from "../utils/pattern-conversion";
 import { serverLogger } from "@mesh-kit/shared";
 
+const { Database } = sqlite3;
+
+type SQLiteDatabase = sqlite3.Database;
+
 export class SQLitePersistenceAdapter implements PersistenceAdapter {
-  private db: Database | null = null;
+  private db: SQLiteDatabase | null = null;
   private options: PersistenceAdapterOptions;
   private initialized = false;
 

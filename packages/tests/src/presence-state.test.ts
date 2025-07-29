@@ -79,7 +79,7 @@ describe("Presence State", () => {
 
   test("presence state expires after TTL", async () => {
     const roomName = "test:room:state-ttl";
-    const shortTTL = 200; // 200ms
+    const shortTTL = 500; // 500ms - increased for reliability
 
     const updates: any[] = [];
     const callback = vi.fn((update: any) => {
@@ -104,13 +104,21 @@ describe("Presence State", () => {
     expect(updates[1].state).toEqual(state);
 
     // wait for ttl to expire
-    await wait(shortTTL + 200);
+    await wait(shortTTL + 300);
+
+    console.log("All updates after TTL expiry:", JSON.stringify(updates, null, 2));
+    console.log("Total callback calls:", callback.mock.calls.length);
 
     // check that the state was removed from storage after TTL expiry
     const statesMap = await server.presenceManager.getAllPresenceStates(roomName);
     const connections = server.connectionManager.getLocalConnections();
     const connection2 = connections[1]!;
     expect(statesMap.has(connection2.id)).toBe(false);
+
+    // The system SHOULD notify subscribers when presence expires
+    // This is the intended behavior based on the presence manager implementation
+    const nullStateUpdates = updates.filter((u) => u.type === "state" && u.state === null);
+    expect(nullStateUpdates.length).toBeGreaterThanOrEqual(1);
   });
 
   test("initial presence subscription includes current states", async () => {
