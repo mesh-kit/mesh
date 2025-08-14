@@ -187,6 +187,10 @@ export class MeshServer extends WebSocketServer {
     const persistencePromise = this.persistenceManager ? this.persistenceManager.ready() : Promise.resolve();
 
     await Promise.all([listeningPromise, this.pubSubManager.getSubscriptionPromise(), persistencePromise]);
+
+    if (this.persistenceManager) {
+      await this.persistenceManager.restorePersistedRecords();
+    }
   }
 
   private applyListeners() {

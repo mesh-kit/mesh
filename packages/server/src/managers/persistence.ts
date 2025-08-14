@@ -94,8 +94,6 @@ export class PersistenceManager extends EventEmitter {
 
       this.messageStream.subscribeToMessages(this.handleStreamMessage.bind(this));
 
-      await this.restorePersistedRecords();
-
       this.initialized = true;
 
       // process any pending record updates that occurred before initialization
@@ -111,7 +109,7 @@ export class PersistenceManager extends EventEmitter {
   /**
    * Restores persisted records from storage into Redis on startup
    */
-  private async restorePersistedRecords(): Promise<void> {
+  async restorePersistedRecords(): Promise<void> {
     if (!this.recordManager) {
       serverLogger.warn("Cannot restore persisted records: record manager not available");
       return;
