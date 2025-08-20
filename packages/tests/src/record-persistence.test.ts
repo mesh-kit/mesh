@@ -89,7 +89,7 @@ describe("Record Persistence System", () => {
       server.enableRecordPersistence("some:pattern");
 
       expect(persistenceManager.recordPatterns.length).toBe(initialLength + 1);
-      expect(persistenceManager.recordPatterns.at(-1).pattern).toBe("some:pattern");
+      expect(persistenceManager.recordPatterns.at(-1).writePattern).toBe("some:pattern");
     });
 
     test("handles record updates and adds them to the buffer", async () => {

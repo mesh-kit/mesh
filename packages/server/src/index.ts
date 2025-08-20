@@ -10,4 +10,4 @@ export { SQLitePersistenceAdapter } from "./persistence/sqlite-adapter";
 export { PostgreSQLPersistenceAdapter } from "./persistence/postgres-adapter";
 export type { PersistenceAdapter, PersistenceAdapterOptions, PostgreSQLAdapterOptions } from "./persistence/types";
 export { MessageStream } from "./persistence/message-stream";
-export { PersistenceManager } from "./managers/persistence";
+export { PersistenceManager, type RecordPersistencePattern } from "./managers/persistence";

@@ -8,13 +8,22 @@ import { MessageStream } from "../persistence/message-stream";
 import { RecordManager } from "./record";
 import { convertToSqlPattern } from "../utils/pattern-conversion";
 
+export type RecordPersistencePattern =
+  | string
+  | RegExp
+  | {
+      writePattern: string | RegExp;
+      restorePattern: string | RegExp;
+    };
+
 interface ChannelPatternConfig {
   pattern: string | RegExp;
   options: Required<ChannelPersistenceOptions>;
 }
 
 interface RecordPatternConfig {
-  pattern: string | RegExp;
+  writePattern: string | RegExp;
+  restorePattern: string | RegExp;
   options: Required<RecordPersistenceOptions>;
 }
 
@@ -124,7 +133,7 @@ export class PersistenceManager extends EventEmitter {
     try {
       serverLogger.info("Restoring persisted records...");
 
-      const patterns = this.recordPatterns.map((p) => (typeof p.pattern === "string" ? p.pattern : p.pattern.source));
+      const patterns = this.recordPatterns.map((p) => (typeof p.restorePattern === "string" ? p.restorePattern : p.restorePattern.source));
 
       if (patterns.length === 0) {
         serverLogger.info("No record patterns to restore");
@@ -208,24 +217,37 @@ export class PersistenceManager extends EventEmitter {
 
   /**
    * Enable persistence for records matching the given pattern.
-   * @param pattern string or regexp pattern to match record IDs
+   * @param pattern string, regexp, or object with writePattern/restorePattern
    * @param options persistence options
    */
-  enableRecordPersistence(pattern: string | RegExp, options: RecordPersistenceOptions = {}): void {
+  enableRecordPersistence(pattern: RecordPersistencePattern, options: RecordPersistenceOptions = {}): void {
     const fullOptions: Required<RecordPersistenceOptions> = {
       adapter: options.adapter ?? this.defaultAdapter,
       flushInterval: options.flushInterval ?? 500,
       maxBufferSize: options.maxBufferSize ?? 100,
     };
 
+    // normalize pattern to writePattern/restorePattern
+    let writePattern: string | RegExp;
+    let restorePattern: string | RegExp;
+
+    if (typeof pattern === "object" && !(pattern instanceof RegExp) && "writePattern" in pattern) {
+      writePattern = pattern.writePattern;
+      restorePattern = pattern.restorePattern;
+    } else {
+      // backward compatibility: same pattern for both write and restore
+      writePattern = pattern;
+      restorePattern = pattern;
+    }
+
     // initialize custom adapter if provided and not shutting down
     if (fullOptions.adapter !== this.defaultAdapter && !this.isShuttingDown) {
       fullOptions.adapter.initialize().catch((err) => {
-        serverLogger.error(`Failed to initialize adapter for record pattern ${pattern}:`, err);
+        serverLogger.error(`Failed to initialize adapter for record pattern ${writePattern}:`, err);
       });
     }
 
-    this.recordPatterns.push({ pattern, options: fullOptions });
+    this.recordPatterns.push({ writePattern, restorePattern, options: fullOptions });
   }
 
   /**
@@ -248,8 +270,8 @@ export class PersistenceManager extends EventEmitter {
    * @returns the persistence options if enabled, undefined otherwise
    */
   getRecordPersistenceOptions(recordId: string): Required<RecordPersistenceOptions> | undefined {
-    for (const { pattern, options } of this.recordPatterns) {
-      if ((typeof pattern === "string" && pattern === recordId) || (pattern instanceof RegExp && pattern.test(recordId))) {
+    for (const { writePattern, options } of this.recordPatterns) {
+      if ((typeof writePattern === "string" && writePattern === recordId) || (writePattern instanceof RegExp && writePattern.test(recordId))) {
         return options;
       }
     }

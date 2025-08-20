@@ -19,7 +19,7 @@ import { RecordSubscriptionManager } from "./managers/record-subscription";
 import { RedisManager } from "./managers/redis";
 import { InstanceManager } from "./managers/instance";
 import { CollectionManager } from "./managers/collection";
-import { PersistenceManager } from "./managers/persistence";
+import { PersistenceManager, type RecordPersistencePattern } from "./managers/persistence";
 
 export class MeshServer extends WebSocketServer {
   readonly instanceId: string;
@@ -338,11 +338,11 @@ export class MeshServer extends WebSocketServer {
   /**
    * Enables persistence for records matching the specified pattern.
    *
-   * @param {ChannelPattern} pattern - The record ID pattern to enable persistence for.
+   * @param {RecordPersistencePattern} pattern - The record ID pattern to enable persistence for.
    * @param {RecordPersistenceOptions} [options] - Options for persistence.
    * @throws {Error} If persistence is not enabled for this server instance.
    */
-  enableRecordPersistence(pattern: ChannelPattern, options: RecordPersistenceOptions = {}): void {
+  enableRecordPersistence(pattern: RecordPersistencePattern, options: RecordPersistenceOptions = {}): void {
     if (!this.persistenceManager) {
       throw new Error("Persistence not enabled. Initialize the persistence manager first.");
     }
