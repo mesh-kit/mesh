@@ -86,14 +86,18 @@ describe("Record Persistence System", () => {
       const { persistenceManager } = server as any;
       const initialLength = persistenceManager.recordPatterns.length;
 
-      server.enableRecordPersistence("some:pattern");
+      server.enableRecordPersistence({
+        pattern: "some:pattern",
+      });
 
       expect(persistenceManager.recordPatterns.length).toBe(initialLength + 1);
-      expect(persistenceManager.recordPatterns.at(-1).writePattern).toBe("some:pattern");
+      expect(persistenceManager.recordPatterns.at(-1).pattern).toBe("some:pattern");
     });
 
     test("handles record updates and adds them to the buffer", async () => {
-      server.enableRecordPersistence(/^profile:user:.*/);
+      server.enableRecordPersistence({
+        pattern: /^profile:user:.*/,
+      });
 
       const { persistenceManager } = server as any;
       const handleRecordUpdateSpy = vi.spyOn(persistenceManager, "handleRecordUpdate");
@@ -106,7 +110,8 @@ describe("Record Persistence System", () => {
     });
 
     test("flushes records to storage when buffer limit is reached", async () => {
-      server.enableRecordPersistence(/^profile:user:.*/, {
+      server.enableRecordPersistence({
+        pattern: /^profile:user:.*/,
         maxBufferSize: 2,
       });
 
@@ -139,7 +144,10 @@ describe("Record Persistence System", () => {
         }
 
         await server.ready();
-        server.enableRecordPersistence(/^profile:user:.*/);
+        server.enableRecordPersistence({
+          pattern: /^profile:user:.*/,
+          adapter: { restorePattern: "profile:user:%" },
+        });
       });
 
       afterEach(async () => {
@@ -210,7 +218,11 @@ describe("Record Persistence System", () => {
         await server.ready();
 
         server.exposeWritableRecord(/^profile:user:.*/);
-        server.enableRecordPersistence(/^profile:user:.*/, { flushInterval: 100 });
+        server.enableRecordPersistence({
+          pattern: /^profile:user:.*/,
+          adapter: { restorePattern: "profile:user:%" },
+          flushInterval: 100,
+        });
 
         client = new MeshClient(`ws://localhost:${port}`);
         await client.connect();

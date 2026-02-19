@@ -1,0 +1,2 @@
+- export `Status` enum in client package
+- subscribeCollection should return a function to unsubscribe

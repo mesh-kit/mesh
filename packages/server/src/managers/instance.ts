@@ -224,6 +224,7 @@ export class InstanceManager {
 
       pipeline.del(roomsKey);
       pipeline.hdel("mesh:connections", connectionId);
+      pipeline.hdel("mesh:connection-meta", connectionId);
 
       await this.deleteMatchingKeys(`mesh:collection:*:${connectionId}`);
 

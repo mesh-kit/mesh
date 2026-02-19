@@ -1,0 +1,272 @@
+import { Callout } from "nextra/components";
+
+# Server: Records
+
+Records are versioned JSON values stored in Redis. Clients can subscribe to them and receive updates in real time - either full values or patches.
+
+## Expose records
+
+Clients can only subscribe to records you explicitly expose:
+
+```ts twoslash
+// @noErrors
+import { MeshServer } from "@mesh-kit/server";
+const server = new MeshServer({});
+// ---cut---
+// Specific ID
+server.exposeRecord("user:123");
+
+// Pattern match
+server.exposeRecord(/^product:\d+$/);
+
+// With guard
+server.exposeRecord(/^private:.+$/, async (conn, recordId) => {
+  const meta = await server.connectionManager.getMetadata(conn);
+  return !!meta?.userId;
+});
+```
+
+## Writable records
+
+To allow clients to modify a record, use `exposeWritableRecord(...){:js}`:
+
+```ts twoslash
+// @noErrors
+import { MeshServer } from "@mesh-kit/server";
+const server = new MeshServer({});
+// ---cut---
+// Anyone can write to cursors
+server.exposeWritableRecord(/^cursor:user:\d+$/);
+
+// Only allow writing to own profile
+server.exposeWritableRecord(/^profile:user:\d+$/, async (conn, recordId) => {
+  const meta = await server.connectionManager.getMetadata(conn);
+  return meta?.userId === id.split(":").pop();
+});
+```
+
+<Callout>
+Writable records are automatically readable. If you want to apply different access rules for reading vs writing, you can expose the same pattern using both `exposeRecord(...){:js}` and `exposeWritableRecord(...){:js}`.
+
+Only the matching guard for the operation type (read or write) will be used. This lets you allow read access to some clients while restricting who can publish updates.
+
+</Callout>
+
+## Update records
+
+Use `writeRecord(...){:js}` to update a record's value and notify subscribers:
+
+```ts twoslash
+// @noErrors
+import { MeshServer } from "@mesh-kit/server";
+const server = new MeshServer({});
+// ---cut---
+await server.writeRecord("user:123", {
+  name: "Alice",
+  status: "active",
+});
+```
+
+This:
+
+1. Stores the new value in Redis
+2. Increments the version
+3. Computes a patch
+4. Broadcasts to all subscribers
+
+<Callout>
+If the new value is identical to the old value (whether it's a patchable JSON object or a primitive value like a string, number, or boolean) the record version is not incremented and no update is sent to subscribed clients.
+</Callout>
+
+To delete a record:
+
+```ts twoslash
+// @noErrors
+import { MeshServer } from "@mesh-kit/server";
+const server = new MeshServer({});
+// ---cut---
+await server.deleteRecord("user:123");
+```
+
+## Get current value
+
+```ts twoslash
+// @noErrors
+import { MeshServer } from "@mesh-kit/server";
+const server = new MeshServer({});
+// ---cut---
+const { value, version } = await server.getRecord("user:123");
+```
+
+## Versioning & patching
+
+Every update increments a version. Clients in `patch` mode expect sequential versions. If a version is missed, Mesh auto-resyncs the client with a full update.
+
+Clients in:
+
+- **Full mode** get the entire value
+- **Patch mode** get a JSON Patch to apply locally
+
+## Use cases
+
+- **User profiles**: synced, editable fields
+- **Collaborative docs**: live document state
+- **Game state**: board state, player status
+- **Dashboards**: metrics and layout configs
+
+## Tips
+
+- Use structured IDs: `"user:123"{:js}`, `"doc:456"{:js}`, `"game:abc"{:js}`
+- Use guards to control read/write access
+- Keep records small and focused
+- Use patch mode for large or frequently updated records
+
+## Record persistence
+
+Mesh supports two persistence modes for records:
+
+1. **Adapter mode**: Mesh stores records as JSON blobs for restore-on-startup
+2. **Hooks mode**: You provide custom functions to persist records to your own database
+
+### Adapter mode
+
+Use adapter mode when you want Mesh to handle persistence internally. Records are stored as JSON blobs and restored on server restart:
+
+```ts twoslash
+// @noErrors
+import { MeshServer } from "@mesh-kit/server";
+const server = new MeshServer({});
+// ---cut---
+server.enableRecordPersistence({
+  pattern: /^profile:user:.+$/,
+  adapter: { restorePattern: "profile:user:%" },
+});
+```
+
+- **`pattern`**: RegExp or string matched at runtime in JavaScript to decide which records to persist
+- **`restorePattern`**: SQL LIKE pattern used to query the database on startup (use `%` as wildcard)
+
+```ts twoslash
+// @noErrors
+import { MeshServer } from "@mesh-kit/server";
+const server = new MeshServer({});
+// ---cut---
+// With buffering options
+server.enableRecordPersistence({
+  pattern: /^game:state:.+$/,
+  adapter: { restorePattern: "game:state:%" },
+  flushInterval: 1000,
+  maxBufferSize: 50,
+});
+```
+
+### Hooks mode
+
+Use hooks mode when you want to persist records to your own database with real columns:
+
+```ts twoslash
+// @noErrors
+import { MeshServer } from "@mesh-kit/server";
+const server = new MeshServer({});
+const db: any = {};
+// ---cut---
+server.enableRecordPersistence({
+  pattern: /^user:\d+$/,
+  hooks: {
+    persist: async (records) => {
+      await db.users.upsertMany(records.map(r => ({
+        id: r.recordId.split(":")[1],
+        name: r.value.name,
+        email: r.value.email,
+        version: r.version,
+      })));
+    },
+    restore: async () => {
+      const users = await db.users.findMany();
+      return users.map(u => ({
+        recordId: `user:${u.id}`,
+        value: { name: u.name, email: u.email },
+        version: u.version,
+      }));
+    },
+  },
+});
+```
+
+With hooks mode:
+
+- `persist` is called with batched records when flushing (after `flushInterval` or `maxBufferSize` is reached)
+- `restore` is called on server startup to load records into Redis
+- You own the schema and can use any ORM or query builder
+
+<Callout>
+Hooks mode makes `writeRecord()` the single write path. You write to Mesh, Mesh distributes to clients AND calls your `persist` hook. You don't write to your database separately.
+</Callout>
+
+### Buffering options
+
+Both modes support buffering options:
+
+- `flushInterval{:js}`: How often to flush buffered records in ms (default: 500)
+- `maxBufferSize{:js}`: Maximum records to buffer before forcing a flush (default: 100)
+
+## Configuring the default adapter
+
+When using adapter mode without specifying a custom adapter, Mesh uses the server's default adapter. Configure it in server options:
+
+### SQLite (default)
+
+```ts twoslash
+// @noErrors
+import { MeshServer } from "@mesh-kit/server";
+
+const server = new MeshServer({
+  port: 3000,
+  redisOptions: { /* ... */ },
+  persistenceOptions: {
+    filename: "./data/mesh.db",
+  },
+});
+
+server.enableRecordPersistence({
+  pattern: /^profile:user:.+$/,
+  adapter: { restorePattern: "profile:user:%" },
+});
+```
+
+### PostgreSQL
+
+```ts twoslash
+// @noErrors
+import { MeshServer } from "@mesh-kit/server";
+
+const server = new MeshServer({
+  port: 3000,
+  redisOptions: { /* ... */ },
+  persistenceAdapter: "postgres",
+  persistenceOptions: {
+    host: "localhost",
+    port: 5432,
+    database: "mesh_db",
+    user: "mesh_user",
+    password: "mesh_password",
+  },
+});
+
+server.enableRecordPersistence({
+  pattern: /^profile:user:.+$/,
+  adapter: { restorePattern: "profile:user:%" },
+});
+```
+
+<Callout>
+By default, the persistence layer uses SQLite with an in-memory database (`":memory:"{:js}`), which means data is lost when the server restarts. Configure a file path or PostgreSQL for true persistence.
+</Callout>
+
+## How it works
+
+Records are always stored in Redis for immediate access. The persistence layer provides long-term storage:
+
+1. When a record is updated via `writeRecord()`, it's stored in Redis
+2. If persistence is enabled, the record is queued for storage (adapter) or your `persist` hook is called
+3. On server restart, records are restored to Redis from the adapter or your `restore` hook

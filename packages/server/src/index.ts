@@ -1,6 +1,6 @@
 export { MeshServer } from "./server";
 export { MeshContext } from "./context";
-export type { SocketMiddleware, MeshServerOptions, ChannelPattern, ServerOptions } from "./types";
+export type { SocketMiddleware, MeshServerOptions, ChannelPattern, ServerOptions, AuthenticateConnectionFn, AuthenticationError } from "./types";
 export { RoomManager } from "./managers/room";
 export { RecordManager } from "./managers/record";
 export { ConnectionManager } from "./managers/connection";
@@ -8,6 +8,6 @@ export { PresenceManager } from "./managers/presence";
 export { Connection } from "./connection";
 export { SQLitePersistenceAdapter } from "./persistence/sqlite-adapter";
 export { PostgreSQLPersistenceAdapter } from "./persistence/postgres-adapter";
-export type { PersistenceAdapter, PersistenceAdapterOptions, PostgreSQLAdapterOptions } from "./persistence/types";
+export type { PersistenceAdapter, PersistenceAdapterOptions, PostgreSQLAdapterOptions, RecordPersistenceConfig, CustomPersistedRecord } from "./persistence/types";
 export { MessageStream } from "./persistence/message-stream";
-export { PersistenceManager, type RecordPersistencePattern } from "./managers/persistence";
+export { PersistenceManager } from "./managers/persistence";

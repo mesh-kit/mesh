@@ -217,11 +217,15 @@ describe("Persistence System", () => {
       expect(userResult).toBe(true);
     });
 
-    describe("getRecordPersistenceOptions", () => {
-      test("returns options for exact string pattern match", () => {
-        const testOptions = { flushInterval: 1000, maxBufferSize: 50 };
-        persistenceManager.enableRecordPersistence("user:profile:123", testOptions);
-        const result = persistenceManager.getRecordPersistenceOptions("user:profile:123");
+    describe("getRecordPersistenceConfig", () => {
+      test("returns config for exact string pattern match", () => {
+        persistenceManager.enableRecordPersistence({
+          pattern: "user:profile:123",
+          adapter: { restorePattern: "user:profile:123" },
+          flushInterval: 1000,
+          maxBufferSize: 50,
+        });
+        const result = persistenceManager.getRecordPersistenceConfig("user:profile:123");
         expect(result).toBeDefined();
         expect(result?.flushInterval).toBe(1000);
         expect(result?.maxBufferSize).toBe(50);
@@ -229,17 +233,24 @@ describe("Persistence System", () => {
       });
 
       test("returns undefined for non-matching exact string pattern", () => {
-        persistenceManager.enableRecordPersistence("user:profile:123");
-        const result = persistenceManager.getRecordPersistenceOptions("user:profile:456");
+        persistenceManager.enableRecordPersistence({
+          pattern: "user:profile:123",
+          adapter: { restorePattern: "user:profile:123" },
+        });
+        const result = persistenceManager.getRecordPersistenceConfig("user:profile:456");
         expect(result).toBeUndefined();
       });
 
-      test("returns options for RegExp pattern match", () => {
-        const testOptions = { flushInterval: 2000, maxBufferSize: 75 };
-        persistenceManager.enableRecordPersistence(/^user:session:[A-Za-z0-9_-]+$/, testOptions);
+      test("returns config for RegExp pattern match", () => {
+        persistenceManager.enableRecordPersistence({
+          pattern: /^user:session:[A-Za-z0-9_-]+$/,
+          adapter: { restorePattern: "user:session:%" },
+          flushInterval: 2000,
+          maxBufferSize: 75,
+        });
         const matchingIds = ["user:session:abc123", "user:session:def_456", "user:session:ghi-789", "user:session:XYZ999"];
         matchingIds.forEach((recordId) => {
-          const result = persistenceManager.getRecordPersistenceOptions(recordId);
+          const result = persistenceManager.getRecordPersistenceConfig(recordId);
           expect(result).toBeDefined();
           expect(result?.flushInterval).toBe(2000);
           expect(result?.maxBufferSize).toBe(75);
@@ -247,7 +258,10 @@ describe("Persistence System", () => {
       });
 
       test("RegExp pattern correctly rejects non-matching record IDs", () => {
-        persistenceManager.enableRecordPersistence(/^user:session:[A-Za-z0-9_-]+$/);
+        persistenceManager.enableRecordPersistence({
+          pattern: /^user:session:[A-Za-z0-9_-]+$/,
+          adapter: { restorePattern: "user:session:%" },
+        });
         const nonMatchingIds = [
           "user:profile:abc123", // wrong type
           "admin:session:abc123", // wrong namespace
@@ -258,50 +272,62 @@ describe("Persistence System", () => {
           "session:abc123", // missing user prefix
         ];
         nonMatchingIds.forEach((recordId) => {
-          const result = persistenceManager.getRecordPersistenceOptions(recordId);
+          const result = persistenceManager.getRecordPersistenceConfig(recordId);
           expect(result).toBeUndefined();
         });
       });
 
       test("handles multiple patterns with priority (first match wins)", () => {
-        const options1 = { flushInterval: 1000 };
-        const options2 = { flushInterval: 2000 };
-        persistenceManager.enableRecordPersistence(/^user:.*$/, options1);
-        persistenceManager.enableRecordPersistence(/^user:session:.*$/, options2);
-        const result = persistenceManager.getRecordPersistenceOptions("user:session:abc123");
+        persistenceManager.enableRecordPersistence({
+          pattern: /^user:.*$/,
+          adapter: { restorePattern: "user:%" },
+          flushInterval: 1000,
+        });
+        persistenceManager.enableRecordPersistence({
+          pattern: /^user:session:.*$/,
+          adapter: { restorePattern: "user:session:%" },
+          flushInterval: 2000,
+        });
+        const result = persistenceManager.getRecordPersistenceConfig("user:session:abc123");
         expect(result).toBeDefined();
         expect(result?.flushInterval).toBe(1000); // matches first pattern defined
       });
 
       test("matches complex regex patterns with alternation", () => {
-        persistenceManager.enableRecordPersistence(/^user:(profile|settings):[A-Za-z0-9_-]+$/);
-        persistenceManager.enableRecordPersistence(/^task:item:[A-Za-z0-9_-]+$/);
-        persistenceManager.enableRecordPersistence(/^doc:page:[A-Za-z0-9_-]+$/);
-        expect(persistenceManager.getRecordPersistenceOptions("user:profile:john123")).toBeDefined();
-        expect(persistenceManager.getRecordPersistenceOptions("user:settings:john123")).toBeDefined();
-        expect(persistenceManager.getRecordPersistenceOptions("user:other:john123")).toBeUndefined();
-        expect(persistenceManager.getRecordPersistenceOptions("task:item:task456")).toBeDefined();
-        expect(persistenceManager.getRecordPersistenceOptions("task:status:task456")).toBeUndefined();
-        expect(persistenceManager.getRecordPersistenceOptions("doc:page:page789")).toBeDefined();
-        expect(persistenceManager.getRecordPersistenceOptions("doc:other:page789")).toBeUndefined();
+        persistenceManager.enableRecordPersistence({
+          pattern: /^user:(profile|settings):[A-Za-z0-9_-]+$/,
+          adapter: { restorePattern: "user:%" },
+        });
+        persistenceManager.enableRecordPersistence({
+          pattern: /^task:item:[A-Za-z0-9_-]+$/,
+          adapter: { restorePattern: "task:item:%" },
+        });
+        persistenceManager.enableRecordPersistence({
+          pattern: /^doc:page:[A-Za-z0-9_-]+$/,
+          adapter: { restorePattern: "doc:page:%" },
+        });
+        expect(persistenceManager.getRecordPersistenceConfig("user:profile:john123")).toBeDefined();
+        expect(persistenceManager.getRecordPersistenceConfig("user:settings:john123")).toBeDefined();
+        expect(persistenceManager.getRecordPersistenceConfig("user:other:john123")).toBeUndefined();
+        expect(persistenceManager.getRecordPersistenceConfig("task:item:task456")).toBeDefined();
+        expect(persistenceManager.getRecordPersistenceConfig("task:status:task456")).toBeUndefined();
+        expect(persistenceManager.getRecordPersistenceConfig("doc:page:page789")).toBeDefined();
+        expect(persistenceManager.getRecordPersistenceConfig("doc:other:page789")).toBeUndefined();
       });
 
-      test("supports writePattern and restorePattern", () => {
-        const testOptions = { flushInterval: 3000, maxBufferSize: 200 };
+      test("supports pattern with adapter config", () => {
+        persistenceManager.enableRecordPersistence({
+          pattern: /^user:(profile|settings):[A-Za-z0-9_-]+$/,
+          adapter: { restorePattern: "user:%" },
+          flushInterval: 3000,
+          maxBufferSize: 200,
+        });
 
-        persistenceManager.enableRecordPersistence(
-          {
-            writePattern: /^user:(profile|settings):[A-Za-z0-9_-]+$/,
-            restorePattern: "user:%",
-          },
-          testOptions,
-        );
+        expect(persistenceManager.getRecordPersistenceConfig("user:profile:john123")).toBeDefined();
+        expect(persistenceManager.getRecordPersistenceConfig("user:settings:john123")).toBeDefined();
+        expect(persistenceManager.getRecordPersistenceConfig("user:other:john123")).toBeUndefined();
 
-        expect(persistenceManager.getRecordPersistenceOptions("user:profile:john123")).toBeDefined();
-        expect(persistenceManager.getRecordPersistenceOptions("user:settings:john123")).toBeDefined();
-        expect(persistenceManager.getRecordPersistenceOptions("user:other:john123")).toBeUndefined();
-
-        const result = persistenceManager.getRecordPersistenceOptions("user:profile:john123");
+        const result = persistenceManager.getRecordPersistenceConfig("user:profile:john123");
         expect(result?.flushInterval).toBe(3000);
         expect(result?.maxBufferSize).toBe(200);
       });

@@ -1,3 +1,4 @@
+import type { IncomingMessage } from "node:http";
 import type { ServerOptions } from "ws";
 import type { RedisOptions } from "ioredis";
 import type { Operation } from "fast-json-patch";
@@ -6,7 +7,20 @@ import type { MeshContext } from "./context";
 import { LogLevel } from "@mesh-kit/shared";
 import type { PersistenceAdapterOptions, PostgreSQLAdapterOptions } from "./persistence/types";
 
+export interface AuthenticationError {
+  code?: number;
+  message?: string;
+}
+
+export type AuthenticateConnectionFn = (req: IncomingMessage) => Promise<any> | any;
+
 export type SocketMiddleware = (context: MeshContext<any>) => any | Promise<any>;
+
+export type VerifyClientInfo = {
+  origin: string;
+  secure: boolean;
+  req: IncomingMessage;
+};
 
 export type PubSubMessagePayload = {
   targetConnectionIds: string[];
@@ -89,6 +103,32 @@ export interface MeshServerOptions extends ServerOptions {
    * @default "sqlite"
    */
   persistenceAdapter?: "sqlite" | "postgres";
+
+  /**
+   * Called during WebSocket upgrade to authenticate the connection.
+   * Receives the raw HTTP request with headers and cookies.
+   *
+   * Return any truthy value to accept the connection - the returned data
+   * will be automatically stored as the connection's initial metadata.
+   *
+   * Throw an error or return null/undefined to reject with 401 Unauthorized.
+   * Throw an object with { code, message } for custom HTTP status codes.
+   *
+   * @example
+   * ```ts
+   * authenticateConnection: async (req) => {
+   *   const cookies = parseCookie(req.headers.cookie || "");
+   *   const token = cookies["auth_token"];
+   *
+   *   const user = await validateToken(token);
+   *   if (!user) throw { code: 401, message: "Invalid token" };
+   *
+   *   // returned data becomes connection metadata
+   *   return { userId: user.id, email: user.email };
+   * }
+   * ```
+   */
+  authenticateConnection?: AuthenticateConnectionFn;
 }
 
 export type ChannelPattern = string | RegExp;

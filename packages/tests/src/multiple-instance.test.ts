@@ -136,3 +136,92 @@ describe.sequential("Multiple instances", () => {
     expect(receivedB).toBe(true);
   }, 10000);
 });
+
+const createAuthTestServer = (port: number) =>
+  new MeshServer({
+    port,
+    redisOptions,
+    authenticateConnection: async () => ({ userId: "test-user", role: "admin" }),
+  });
+
+describe.sequential("Multiple instances with authenticateConnection", () => {
+  let serverA: MeshServer;
+  let serverB: MeshServer;
+  let clientA: MeshClient;
+  let clientB: MeshClient;
+
+  beforeEach(async () => {
+    await flushRedis();
+
+    serverA = createAuthTestServer(0);
+    serverB = createAuthTestServer(0);
+    await serverA.ready();
+    await serverB.ready();
+
+    clientA = new MeshClient(`ws://localhost:${serverA.port}`);
+    clientB = new MeshClient(`ws://localhost:${serverB.port}`);
+  });
+
+  afterEach(async () => {
+    await clientA.close();
+    await clientB.close();
+
+    await serverA.close();
+    await serverB.close();
+  });
+
+  test("broadcastRoom should work when authenticateConnection is configured", async () => {
+    [serverA, serverB].forEach((server) =>
+      server.exposeCommand("join-room", async (ctx) => {
+        await server.addToRoom(ctx.payload.room, ctx.connection);
+        return { joined: true };
+      }),
+    );
+
+    serverA.exposeCommand("broadcast-room", async (ctx) => {
+      await serverA.broadcastRoom(ctx.payload.room, "room-message", ctx.payload.message);
+      return { sent: true };
+    });
+
+    await clientA.connect();
+    await clientB.connect();
+
+    await clientA.command("join-room", { room: "auth-room" });
+    await clientB.command("join-room", { room: "auth-room" });
+
+    let receivedA = false;
+    let receivedB = false;
+
+    // @ts-ignore
+    clientA.on("room-message", (data) => {
+      if (data === "hello") receivedA = true;
+    });
+
+    // @ts-ignore
+    clientB.on("room-message", (data) => {
+      if (data === "hello") receivedB = true;
+    });
+
+    await clientA.command("broadcast-room", {
+      room: "auth-room",
+      message: "hello",
+    });
+
+    await new Promise<void>((resolve) => {
+      const interval = setInterval(() => {
+        if (!(receivedA && receivedB)) return;
+        clearTimeout(timeout);
+        clearInterval(interval);
+        resolve();
+      }, 10);
+
+      const timeout = setTimeout(() => {
+        clearInterval(interval);
+        resolve();
+      }, 10000);
+    });
+
+    expect(receivedA).toBe(true);
+    expect(receivedB).toBe(true);
+  }, 10000);
+});

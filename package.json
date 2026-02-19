@@ -8,7 +8,7 @@
   "description": "A lightweight, distributed, command-based WebSocket framework for real-time applications.",
   "main": "index.js",
   "scripts": {
-    "build": "npm run build --workspaces",
+    "build": "npm run build --workspaces --if-present",
     "test": "npm run test --workspaces",
     "clean": "rm -rf packages/*/dist packages/*/node_modules node_modules"
   },

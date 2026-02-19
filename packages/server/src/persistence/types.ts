@@ -48,23 +48,21 @@ export interface ChannelPersistenceOptions {
   maxBufferSize?: number;
 }
 
-export interface RecordPersistenceOptions {
-  /**
-   * Optional adapter override for this pattern
-   */
+export interface RecordPersistenceAdapterConfig {
   adapter?: PersistenceAdapter;
+  restorePattern: string;
+}
 
-  /**
-   * How often (in ms) to flush buffered records to the database
-   * @default 500
-   */
+export interface RecordPersistenceHooksConfig {
+  persist: (records: CustomPersistedRecord[]) => Promise<void>;
+  restore: () => Promise<CustomPersistedRecord[]>;
+}
+
+export interface RecordPersistenceConfig {
+  pattern: string | RegExp;
+  adapter?: RecordPersistenceAdapterConfig;
+  hooks?: RecordPersistenceHooksConfig;
   flushInterval?: number;
-
-  /**
-   * Maximum number of records to hold in memory before flushing
-   * If this limit is reached, the buffer is flushed immediately
-   * @default 100
-   */
   maxBufferSize?: number;
 }
 
@@ -73,6 +71,12 @@ export interface PersistedRecord {
   version: number;
   value: string;
   timestamp: number;
+}
+
+export interface CustomPersistedRecord {
+  recordId: string;
+  value: unknown;
+  version: number;
 }
 
 export interface PersistenceAdapterOptions {

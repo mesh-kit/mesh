@@ -4,6 +4,7 @@ import type { Connection } from "../connection";
 import type { RoomManager } from "./room";
 
 const CONNECTIONS_HASH_KEY = "mesh:connections";
+const CONNECTIONS_META_HASH_KEY = "mesh:connection-meta";
 const INSTANCE_CONNECTIONS_KEY_PREFIX = "mesh:connections:";
 
 export class ConnectionManager {
@@ -112,9 +113,7 @@ export class ConnectionManager {
       }
     }
 
-    const pipeline = this.redis.pipeline();
-    pipeline.hset(CONNECTIONS_HASH_KEY, connection.id, JSON.stringify(finalMetadata));
-    await pipeline.exec();
+    await this.redis.hset(CONNECTIONS_META_HASH_KEY, connection.id, JSON.stringify(finalMetadata));
   }
 
   /**
@@ -126,7 +125,7 @@ export class ConnectionManager {
    * @throws {Error} If a Redis error occurs during retrieval.
    */
   async getMetadata(connection: Connection): Promise<any | null> {
-    const metadata = await this.redis.hget(CONNECTIONS_HASH_KEY, connection.id);
+    const metadata = await this.redis.hget(CONNECTIONS_META_HASH_KEY, connection.id);
     return metadata ? JSON.parse(metadata) : null;
   }
 
@@ -140,20 +139,7 @@ export class ConnectionManager {
    */
   async getAllMetadata(): Promise<Array<{ id: string; metadata: any }>> {
     const connectionIds = await this.getAllConnectionIds();
-    const metadata = await this.getInstanceIdsForConnections(connectionIds);
-    const result: Array<{ id: string; metadata: any }> = [];
-
-    connectionIds.forEach((id) => {
-      try {
-        const parsedMetadata = metadata[id] ? JSON.parse(metadata[id]) : null;
-        result.push({ id, metadata: parsedMetadata });
-      } catch (e) {
-        console.error(`Failed to parse metadata for connection ${id}:`, e);
-        result.push({ id, metadata: null });
-      }
-    });
-
-    return result;
+    return this.getMetadataForConnectionIds(connectionIds);
   }
 
   /**
@@ -168,23 +154,25 @@ export class ConnectionManager {
    */
   async getAllMetadataForRoom(roomName: string): Promise<Array<{ id: string; metadata: any }>> {
     const connectionIds = await this.roomManager.getRoomConnectionIds(roomName);
-    const metadata = await this.getInstanceIdsForConnections(connectionIds);
-    const result: Array<{ id: string; metadata: any }> = [];
+    return this.getMetadataForConnectionIds(connectionIds);
+  }
 
-    connectionIds.forEach((id) => {
+  private async getMetadataForConnectionIds(connectionIds: string[]): Promise<Array<{ id: string; metadata: any }>> {
+    if (connectionIds.length === 0) return [];
+
+    const values = await this.redis.hmget(CONNECTIONS_META_HASH_KEY, ...connectionIds);
+    return connectionIds.map((id, index) => {
       try {
-        const parsedMetadata = metadata[id] ? JSON.parse(metadata[id]) : null;
-        result.push({ id, metadata: parsedMetadata });
+        const raw = values[index];
+        return { id, metadata: raw ? JSON.parse(raw) : null };
       } catch (e) {
-        console.error(`Failed to parse metadata for connection ${id}:`, e);
-        result.push({ id, metadata: null });
+        return { id, metadata: null };
       }
     });
-
-    return result;
   }
 
   async cleanupConnection(connection: Connection): Promise<void> {
     await this.deregisterConnection(connection);
+    await this.redis.hdel(CONNECTIONS_META_HASH_KEY, connection.id);
   }
 }

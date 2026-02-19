@@ -4,8 +4,8 @@ import { WebSocketServer } from "ws";
 import { LogLevel, Status, serverLogger, parseCommand } from "@mesh-kit/shared";
 import { Connection } from "./connection";
 import { MeshContext } from "./context";
-import type { ChannelPattern, MeshServerOptions, SocketMiddleware } from "./types";
-import type { RecordPersistenceOptions, ChannelPersistenceOptions } from "./persistence/types";
+import type { AuthenticateConnectionFn, ChannelPattern, MeshServerOptions, SocketMiddleware, VerifyClientInfo } from "./types";
+import type { RecordPersistenceConfig, ChannelPersistenceOptions } from "./persistence/types";
 import { PUB_SUB_CHANNEL_PREFIX } from "./utils/constants";
 import { ConnectionManager } from "./managers/connection";
 import { PresenceManager } from "./managers/presence";
@@ -19,7 +19,9 @@ import { RecordSubscriptionManager } from "./managers/record-subscription";
 import { RedisManager } from "./managers/redis";
 import { InstanceManager } from "./managers/instance";
 import { CollectionManager } from "./managers/collection";
-import { PersistenceManager, type RecordPersistencePattern } from "./managers/persistence";
+import { PersistenceManager } from "./managers/persistence";
+
+const pendingAuthDataStore = new WeakMap<IncomingMessage, any>();
 
 export class MeshServer extends WebSocketServer {
   readonly instanceId: string;
@@ -33,6 +35,7 @@ export class MeshServer extends WebSocketServer {
   private collectionManager: CollectionManager;
   private broadcastManager: BroadcastManager;
   private persistenceManager: PersistenceManager | null = null;
+  private authenticateConnection?: AuthenticateConnectionFn;
   roomManager: RoomManager;
   recordManager: RecordManager;
   connectionManager: ConnectionManager;
@@ -57,8 +60,31 @@ export class MeshServer extends WebSocketServer {
   }
 
   constructor(opts: MeshServerOptions) {
-    super(opts);
+    const wsOpts = { ...opts };
 
+    if (opts.authenticateConnection) {
+      wsOpts.verifyClient = (info: VerifyClientInfo, cb: (result: boolean, code?: number, message?: string) => void) => {
+        Promise.resolve()
+          .then(() => opts.authenticateConnection!(info.req))
+          .then((authData) => {
+            if (authData != null) {
+              pendingAuthDataStore.set(info.req, authData);
+              cb(true);
+            } else {
+              cb(false, 401, "Unauthorized");
+            }
+          })
+          .catch((err) => {
+            const code = err?.code ?? 401;
+            const message = err?.message ?? "Unauthorized";
+            cb(false, code, message);
+          });
+      };
+    }
+
+    super(wsOpts);
+
+    this.authenticateConnection = opts.authenticateConnection;
     this.instanceId = uuidv4();
     this.serverOptions = {
       ...opts,
@@ -213,6 +239,12 @@ export class MeshServer extends WebSocketServer {
       try {
         await this.connectionManager.registerConnection(connection);
 
+        const authData = pendingAuthDataStore.get(req);
+        if (authData) {
+          pendingAuthDataStore.delete(req);
+          await this.connectionManager.setMetadata(connection, authData);
+        }
+
         connection.send({
           command: "mesh/assign-id",
           payload: connection.id,
@@ -337,17 +369,14 @@ export class MeshServer extends WebSocketServer {
 
   /**
    * Enables persistence for records matching the specified pattern.
-   *
-   * @param {RecordPersistencePattern} pattern - The record ID pattern to enable persistence for.
-   * @param {RecordPersistenceOptions} [options] - Options for persistence.
-   * @throws {Error} If persistence is not enabled for this server instance.
+   * Use either adapter (for mesh's internal JSON blob storage) or hooks (for custom DB persistence).
    */
-  enableRecordPersistence(pattern: RecordPersistencePattern, options: RecordPersistenceOptions = {}): void {
+  enableRecordPersistence(config: RecordPersistenceConfig): void {
     if (!this.persistenceManager) {
       throw new Error("Persistence not enabled. Initialize the persistence manager first.");
     }
 
-    this.persistenceManager.enableRecordPersistence(pattern, options);
+    this.persistenceManager.enableRecordPersistence(config);
   }
 
   // #endregion
@@ -516,7 +545,7 @@ export class MeshServer extends WebSocketServer {
           if (connection) {
             metadata = await this.connectionManager.getMetadata(connection);
           } else {
-            const metadataString = await this.redisManager.redis.hget("mesh:connections", connectionId);
+            const metadataString = await this.redisManager.redis.hget("mesh:connection-meta", connectionId);
             metadata = metadataString ? JSON.parse(metadataString) : null;
           }
 
@@ -709,7 +738,7 @@ export class MeshServer extends WebSocketServer {
         const metadata = await this.connectionManager.getMetadata(connection);
         return { metadata };
       } else {
-        const metadata = await this.redisManager.redis.hget("mesh:connections", connectionId);
+        const metadata = await this.redisManager.redis.hget("mesh:connection-meta", connectionId);
         return { metadata: metadata ? JSON.parse(metadata) : null };
       }
     });
@@ -721,7 +750,7 @@ export class MeshServer extends WebSocketServer {
         const metadata = await this.connectionManager.getMetadata(connection);
         return { metadata };
       } else {
-        const metadata = await this.redisManager.redis.hget("mesh:connections", connectionId);
+        const metadata = await this.redisManager.redis.hget("mesh:connection-meta", connectionId);
         return { metadata: metadata ? JSON.parse(metadata) : null };
       }
     });

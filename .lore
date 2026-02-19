@@ -1,0 +1,42 @@
+-- pitfalls --
+
+when attaching to an express/http server, you MUST call httpServer.listen() BEFORE mesh.ready(). ready() waits for the "listening" event - if you call ready() before listen(), it deadlocks forever.
+
+do NOT implement your own ping/pong commands. mesh handles connection health automatically via built-in ping/pong at pingInterval (default 30s) and latency measurement at latencyInterval (default 5s). creating a custom ping command is redundant and shows a misunderstanding of the framework.
+
+if using hooks mode for record persistence (persisting to your own DB schema), you do NOT need persistenceAdapter or persistenceOptions in server config. those are only for mesh's built-in adapter mode (JSON blob storage) and channel persistence.
+
+ready() must be awaited before the server is operational. it waits for: http server listening, redis pub/sub subscription, persistence manager init, persisted record restoration.
+
+-- client --
+
+client reconnection options: shouldReconnect (bool), reconnectInterval (ms, default 2000), maxReconnectAttempts (default 5)
+
+client events: connect, disconnect, reconnect, reconnectfailed, close, error, ping, latency (ms), message (raw)
+
+client lifecycle methods: onConnect, onDisconnect, onReconnect, onReconnectFailed
+
+-- integration --
+
+integrates with @eaccess/auth via authenticateConnection option. use authenticateRequest(authConfig, req, sessionMiddleware) to validate sessions/remember tokens during websocket upgrade. return value becomes connection metadata. throw { code: 401, message } to reject.
+
+role-based guards work by checking rolemask from connection metadata: (meta.rolemask & AuthRole.Admin) === AuthRole.Admin
+
+-- broadcasting --
+
+broadcastExclude(event, payload, connection) - broadcast to all except one connection
+broadcastRoomExclude(room, event, payload, connections[]) - broadcast to room except specific connections
+
+-- presence --
+
+subscribePresence returns { success, present, states }
+presence update types: join, leave, state
+publishPresenceState(room, { state, expireAfter }) for ephemeral state (typing indicators, cursors)
+clearPresenceState(room) to remove ephemeral state
+trackPresence accepts guard and ttl options
+
+-- collections --
+
+exposeCollection(pattern, resolver) where resolver returns record IDs
+client subscribeCollection returns { success, ids, records, version } with onUpdate and onDiff callbacks
+onDiff provides { added: string[], removed: string[] } for membership changes

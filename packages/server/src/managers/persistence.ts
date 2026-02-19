@@ -1,20 +1,12 @@
 import { EventEmitter } from "events";
 import { v4 as uuidv4 } from "uuid";
 import { serverLogger } from "@mesh-kit/shared";
-import type { PersistenceAdapter, PersistedMessage, ChannelPersistenceOptions, RecordPersistenceOptions, PersistedRecord } from "../persistence/types";
-import { SQLitePersistenceAdapter } from "../persistence/sqlite-adapter";
-import { PostgreSQLPersistenceAdapter } from "../persistence/postgres-adapter";
+import type { PersistenceAdapter, PersistedMessage, ChannelPersistenceOptions, RecordPersistenceConfig, PersistedRecord, CustomPersistedRecord } from "../persistence/types";
+import type { SQLitePersistenceAdapter as SQLiteType } from "../persistence/sqlite-adapter";
+import type { PostgreSQLPersistenceAdapter as PostgresType } from "../persistence/postgres-adapter";
 import { MessageStream } from "../persistence/message-stream";
 import { RecordManager } from "./record";
 import { convertToSqlPattern } from "../utils/pattern-conversion";
-
-export type RecordPersistencePattern =
-  | string
-  | RegExp
-  | {
-      writePattern: string | RegExp;
-      restorePattern: string | RegExp;
-    };
 
 interface ChannelPatternConfig {
   pattern: string | RegExp;
@@ -22,10 +14,14 @@ interface ChannelPatternConfig {
 }
 
 interface RecordPatternConfig {
-  writePattern: string | RegExp;
-  restorePattern: string | RegExp;
-  options: Required<RecordPersistenceOptions>;
+  pattern: string | RegExp;
+  adapter?: { adapter: PersistenceAdapter; restorePattern: string };
+  hooks?: { persist: (records: CustomPersistedRecord[]) => Promise<void>; restore: () => Promise<CustomPersistedRecord[]> };
+  flushInterval: number;
+  maxBufferSize: number;
 }
+
+type ResolvedAdapterConfig = { adapter: PersistenceAdapter; restorePattern: string };
 
 export class PersistenceManager extends EventEmitter {
   private defaultAdapter: PersistenceAdapter;
@@ -48,8 +44,10 @@ export class PersistenceManager extends EventEmitter {
     const { defaultAdapterOptions = {}, adapterType = "sqlite" } = options;
 
     if (adapterType === "postgres") {
+      const { PostgreSQLPersistenceAdapter } = require("../persistence/postgres-adapter") as { PostgreSQLPersistenceAdapter: typeof PostgresType };
       this.defaultAdapter = new PostgreSQLPersistenceAdapter(defaultAdapterOptions);
     } else {
+      const { SQLitePersistenceAdapter } = require("../persistence/sqlite-adapter") as { SQLitePersistenceAdapter: typeof SQLiteType };
       this.defaultAdapter = new SQLitePersistenceAdapter(defaultAdapterOptions);
     }
 
@@ -133,46 +131,60 @@ export class PersistenceManager extends EventEmitter {
     try {
       serverLogger.info("Restoring persisted records...");
 
-      const patterns = this.recordPatterns.map((p) => (typeof p.restorePattern === "string" ? p.restorePattern : p.restorePattern.source));
-
-      if (patterns.length === 0) {
+      if (this.recordPatterns.length === 0) {
         serverLogger.info("No record patterns to restore");
         return;
       }
 
-      // for each pattern, get records from storage
-      for (const pattern of patterns) {
+      serverLogger.info(`Found ${this.recordPatterns.length} record patterns to restore`);
+      for (const config of this.recordPatterns) {
+        serverLogger.info(`Config keys: ${Object.keys(config).join(", ")}`);
+        serverLogger.info(`Config.hooks: ${typeof config.hooks}, Config.adapter: ${typeof config.adapter}`);
+        serverLogger.info(`Config.pattern: ${config.pattern}`);
+        const { adapter, hooks } = config;
+        const patternLabel = hooks ? "(custom hooks)" : adapter?.restorePattern;
+
         try {
-          const sqlPattern = convertToSqlPattern(pattern);
-          const records = (await this.defaultAdapter.getRecords?.(sqlPattern)) || [];
+          let records: Array<{ recordId: string; value: unknown; version: number }> = [];
+
+          if (hooks) {
+            records = await hooks.restore();
+          } else if (adapter) {
+            const adapterRecords = adapter.adapter.getRecords
+              ? await adapter.adapter.getRecords(adapter.restorePattern)
+              : [];
+            records = adapterRecords.map((r) => ({
+              recordId: r.recordId,
+              value: typeof r.value === "string" ? JSON.parse(r.value) : r.value,
+              version: r.version,
+            }));
+          }
 
           if (records.length > 0) {
-            serverLogger.info(`Restoring ${records.length} records for pattern ${pattern}`);
+            serverLogger.info(`Restoring ${records.length} records for pattern ${patternLabel}`);
 
-            // move each record to Redis
             for (const record of records) {
               try {
                 const { recordId, value, version } = record;
-                const parsedValue = typeof value === "string" ? JSON.parse(value) : value;
 
                 const recordKey = this.recordManager.recordKey(recordId);
                 const versionKey = this.recordManager.recordVersionKey(recordId);
 
                 const pipeline = redis.pipeline();
-                pipeline.set(recordKey, JSON.stringify(parsedValue));
+                pipeline.set(recordKey, JSON.stringify(value));
                 pipeline.set(versionKey, version.toString());
                 await pipeline.exec();
 
                 serverLogger.debug(`Restored record ${recordId} (version ${version})`);
               } catch (parseErr) {
-                serverLogger.error(`Failed to parse record value for recordId: ${record.recordId}: ${parseErr}`);
+                serverLogger.error(`Failed to restore record ${record.recordId}: ${parseErr}`);
               }
             }
           } else {
-            serverLogger.debug(`No records found for pattern ${pattern}`);
+            serverLogger.debug(`No records found for pattern ${patternLabel}`);
           }
         } catch (patternErr) {
-          serverLogger.error(`Error restoring records for pattern ${pattern}: ${patternErr}`);
+          serverLogger.error(`Error restoring records for pattern ${patternLabel}: ${patternErr}`);
         }
       }
 
@@ -217,37 +229,36 @@ export class PersistenceManager extends EventEmitter {
 
   /**
    * Enable persistence for records matching the given pattern.
-   * @param pattern string, regexp, or object with writePattern/restorePattern
-   * @param options persistence options
+   * Use either adapter (for mesh's internal JSON blob storage) or hooks (for custom DB persistence).
    */
-  enableRecordPersistence(pattern: RecordPersistencePattern, options: RecordPersistenceOptions = {}): void {
-    const fullOptions: Required<RecordPersistenceOptions> = {
-      adapter: options.adapter ?? this.defaultAdapter,
-      flushInterval: options.flushInterval ?? 500,
-      maxBufferSize: options.maxBufferSize ?? 100,
-    };
+  enableRecordPersistence(config: RecordPersistenceConfig): void {
+    serverLogger.info(`enableRecordPersistence called with config keys: ${Object.keys(config).join(", ")}`);
+    serverLogger.info(`config.hooks type: ${typeof config.hooks}, config.adapter type: ${typeof config.adapter}`);
+    const { pattern, adapter, hooks, flushInterval, maxBufferSize } = config;
 
-    // normalize pattern to writePattern/restorePattern
-    let writePattern: string | RegExp;
-    let restorePattern: string | RegExp;
-
-    if (typeof pattern === "object" && !(pattern instanceof RegExp) && "writePattern" in pattern) {
-      writePattern = pattern.writePattern;
-      restorePattern = pattern.restorePattern;
-    } else {
-      // backward compatibility: same pattern for both write and restore
-      writePattern = pattern;
-      restorePattern = pattern;
+    if (adapter && hooks) {
+      throw new Error("Cannot use both adapter and hooks. Choose one.");
     }
 
-    // initialize custom adapter if provided and not shutting down
-    if (fullOptions.adapter !== this.defaultAdapter && !this.isShuttingDown) {
-      fullOptions.adapter.initialize().catch((err) => {
-        serverLogger.error(`Failed to initialize adapter for record pattern ${writePattern}:`, err);
-      });
+    let resolvedAdapter: ResolvedAdapterConfig | undefined;
+    if (adapter) {
+      const adapterInstance = adapter.adapter ?? this.defaultAdapter;
+      resolvedAdapter = { adapter: adapterInstance, restorePattern: adapter.restorePattern };
+
+      if (adapterInstance !== this.defaultAdapter && !this.isShuttingDown) {
+        adapterInstance.initialize().catch((err) => {
+          serverLogger.error(`Failed to initialize adapter for record pattern ${pattern}:`, err);
+        });
+      }
     }
 
-    this.recordPatterns.push({ writePattern, restorePattern, options: fullOptions });
+    this.recordPatterns.push({
+      pattern,
+      adapter: resolvedAdapter,
+      hooks,
+      flushInterval: flushInterval ?? 500,
+      maxBufferSize: maxBufferSize ?? 100,
+    });
   }
 
   /**
@@ -265,14 +276,15 @@ export class PersistenceManager extends EventEmitter {
   }
 
   /**
-   * Check if a record has persistence enabled and return its options.
+   * Check if a record has persistence enabled and return its config.
    * @param recordId record ID to check
-   * @returns the persistence options if enabled, undefined otherwise
+   * @returns the persistence config if enabled, undefined otherwise
    */
-  getRecordPersistenceOptions(recordId: string): Required<RecordPersistenceOptions> | undefined {
-    for (const { writePattern, options } of this.recordPatterns) {
-      if ((typeof writePattern === "string" && writePattern === recordId) || (writePattern instanceof RegExp && writePattern.test(recordId))) {
-        return options;
+  getRecordPersistenceConfig(recordId: string): RecordPatternConfig | undefined {
+    for (const config of this.recordPatterns) {
+      const { pattern } = config;
+      if ((typeof pattern === "string" && pattern === recordId) || (pattern instanceof RegExp && pattern.test(recordId))) {
+        return config;
       }
     }
     return undefined;
@@ -426,8 +438,8 @@ export class PersistenceManager extends EventEmitter {
       return;
     }
 
-    const options = this.getRecordPersistenceOptions(recordId);
-    if (!options) return; // record doesn't match any persistence pattern
+    const config = this.getRecordPersistenceConfig(recordId);
+    if (!config) return;
 
     const persistedRecord: PersistedRecord = {
       recordId,
@@ -440,17 +452,17 @@ export class PersistenceManager extends EventEmitter {
 
     serverLogger.debug(`Added record ${recordId} to buffer, buffer size: ${this.recordBuffer.size}`);
 
-    if (this.recordBuffer.size >= options.maxBufferSize) {
-      serverLogger.debug(`Buffer size ${this.recordBuffer.size} exceeds limit ${options.maxBufferSize}, flushing records`);
+    if (this.recordBuffer.size >= config.maxBufferSize) {
+      serverLogger.debug(`Buffer size ${this.recordBuffer.size} exceeds limit ${config.maxBufferSize}, flushing records`);
       this.flushRecords();
       return;
     }
 
     if (!this.recordFlushTimer) {
-      serverLogger.debug(`Scheduling record flush in ${options.flushInterval}ms`);
+      serverLogger.debug(`Scheduling record flush in ${config.flushInterval}ms`);
       this.recordFlushTimer = setTimeout(() => {
         this.flushRecords();
-      }, options.flushInterval);
+      }, config.flushInterval);
 
       if (this.recordFlushTimer.unref) {
         this.recordFlushTimer.unref();
@@ -475,19 +487,61 @@ export class PersistenceManager extends EventEmitter {
     this.recordBuffer.clear();
 
     const recordsByAdapter = new Map<PersistenceAdapter, PersistedRecord[]>();
+    const recordsByPersistFn = new Map<(records: CustomPersistedRecord[]) => Promise<void>, PersistedRecord[]>();
 
     for (const record of records) {
-      const options = this.getRecordPersistenceOptions(record.recordId);
-      if (!options) continue;
+      const config = this.getRecordPersistenceConfig(record.recordId);
+      if (!config) continue;
 
-      const { adapter } = options;
-      if (!recordsByAdapter.has(adapter)) {
-        recordsByAdapter.set(adapter, []);
+      if (config.hooks) {
+        if (!recordsByPersistFn.has(config.hooks.persist)) {
+          recordsByPersistFn.set(config.hooks.persist, []);
+        }
+        recordsByPersistFn.get(config.hooks.persist)!.push(record);
+      } else if (config.adapter) {
+        if (!recordsByAdapter.has(config.adapter.adapter)) {
+          recordsByAdapter.set(config.adapter.adapter, []);
+        }
+        recordsByAdapter.get(config.adapter.adapter)!.push(record);
       }
-      recordsByAdapter.get(adapter)!.push(record);
     }
 
-    // store records on each known adapter
+    const handleFlushError = (failedRecords: PersistedRecord[], err: unknown) => {
+      serverLogger.error("Failed to flush records:", err);
+
+      if (!this.isShuttingDown) {
+        for (const record of failedRecords) {
+          this.recordBuffer.set(record.recordId, record);
+        }
+
+        if (!this.recordFlushTimer) {
+          this.recordFlushTimer = setTimeout(() => {
+            this.flushRecords();
+          }, 1000);
+
+          if (this.recordFlushTimer.unref) {
+            this.recordFlushTimer.unref();
+          }
+        }
+      }
+    };
+
+    for (const [persistFn, persistRecords] of recordsByPersistFn.entries()) {
+      try {
+        const customRecords: CustomPersistedRecord[] = persistRecords.map((r) => ({
+          recordId: r.recordId,
+          value: JSON.parse(r.value),
+          version: r.version,
+        }));
+
+        serverLogger.debug(`Storing ${persistRecords.length} records with custom persist hook`);
+        await persistFn(customRecords);
+        this.emit("recordsFlushed", { count: persistRecords.length });
+      } catch (err) {
+        handleFlushError(persistRecords, err);
+      }
+    }
+
     for (const [adapter, adapterRecords] of recordsByAdapter.entries()) {
       try {
         if (adapter.storeRecords) {
@@ -498,23 +552,7 @@ export class PersistenceManager extends EventEmitter {
           serverLogger.warn("Adapter does not support storing records");
         }
       } catch (err) {
-        serverLogger.error("Failed to flush records:", err);
-
-        if (!this.isShuttingDown) {
-          for (const record of adapterRecords) {
-            this.recordBuffer.set(record.recordId, record);
-          }
-
-          if (!this.recordFlushTimer) {
-            this.recordFlushTimer = setTimeout(() => {
-              this.flushRecords();
-            }, 1000);
-
-            if (this.recordFlushTimer.unref) {
-              this.recordFlushTimer.unref();
-            }
-          }
-        }
+        handleFlushError(adapterRecords, err);
       }
     }
   }
@@ -574,8 +612,10 @@ export class PersistenceManager extends EventEmitter {
       adapters.add(options.adapter);
     }
 
-    for (const { options } of this.recordPatterns) {
-      adapters.add(options.adapter);
+    for (const config of this.recordPatterns) {
+      if (config.adapter) {
+        adapters.add(config.adapter.adapter);
+      }
     }
 
     for (const adapter of adapters) {
